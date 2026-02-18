@@ -1,3 +1,4 @@
+import sre_compile
 import torch
 import torch.nn as nn
 import math
@@ -41,7 +42,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class layernormalization(nn.Module):
+class Layernormalization(nn.Module):
 
     def __init__(self, eps:float = 10**-6) -> None:
         super().__init__()
@@ -56,7 +57,7 @@ class layernormalization(nn.Module):
 
         return self.aplha * (x-mean) / (std +self.eps) + self.bias
 
-class feedforward(nn.Module):
+class FeedforwardBlock(nn.Module):
     def __init__(self, d_model:int, d_ff:int, dropout:float) -> None:
         super().__init__()
 
@@ -76,7 +77,8 @@ class MultiheadattentionBlock(nn.Module):
 
         assert d_model % h == 0, "d_model is not divisible by h"
 
-        self.d_k = d_model / h
+        self.d_k = d_model // h
+        self.h = h
 
         self.w_q = nn.Linear(d_model,d_model)
         self.w_k = nn.Linear(d_model, d_model)
@@ -86,9 +88,19 @@ class MultiheadattentionBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    @staticmethod
+    def attention(query, key, value, mask, dropout: nn.Dropout):
+        d_k = query.shape[-1]
+
+        atention_scores = (query @key.transpose(-2,-1)) / math.sqrt(d_k)
+        if mask is not None:
+            attention_scores.masked_fill_(mask == 0, -1e9)
+        attention_scores = attention_scores.softmax(dim = -1)
+
+        return (attention_scores @ value), attention_scores
+
 
     def forward(self, q, k, v, mask):
-
 
         query = self.w_q(q)
         key   = self.w_k(k)
@@ -101,16 +113,75 @@ class MultiheadattentionBlock(nn.Module):
 
         x, self.attention_scores = MultiheadattentionBlock.attention(query, key, value, mask,self.dropout)
 
-    @staticmethod
-    def attention(query, key, value, mask, dropout: nn.Dropout):
-        d_k = query.shape[-1]
+        # (Batch, h, Seq_length, d_k) --> (Batch, seq_length, h, d_k) --> (Batch, seq_length, d_model)
+        x = x.transpose(1,2).contigous().view(x.shape[0], -1, self.dk*self.h)
 
-        atention_scores = (query @key.transpose(-2,-1)) / math.sqrt(d_k)
-        if mask is not None:
-            attention_scores.masked_fill_(mask == 0, -1e9)
-        attention_scores = attention_scores.softmax(dim = -1)
+        return self.w_o(x)
 
 
+class ResidualConnection(nn.Module):
+    def __init__(self, dropout:float) -> None:
+        super().__init__()
+        self.norm = Layernormalization()
+        self.dropout = nn.Dropout(dropout)
 
+    def forward(self, x, sublayer):
+        return x + self.dropout(sublayer(self.norm(x)))
+
+    
+class Encoderblock(nn.Module):
+    
+    def __init__(self, self_attention_block: MultiheadattentionBlock, feed_forward_block: FeedforwardBlock, dropout: float) -> None:
+        super().__init__()
+        self.self_attention_block = self_attention_block
+        self.feed_forward_block = feed_forward_block
+        self.residual_connections = nn.Module([ResidualConnection(dropout) for _ in range(2)])
+    
+    def forward(self, x, src_mask):
+        x = self.residual_connections[0](x, lambda: x:self.self_attention_block(x,x,x,src_mask))
+        x = self.residual_connections[1](x, self.feed_forward_block)
+
+        return x
+    
+class Encoder(nn.Module):
+    
+    def __init__(self, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = Layernormalization()
+
+    def forward(self, x, mask):
+        for layer in self.layers:
+            x = layer(x, mask)
+
+        return self.norm(x)
+
+class Decoderblock(nn.Module):
+
+    def __init__(self, self_attention_block:MultiheadattentionBlock, cross_attention_block:MultiheadattentionBlock, feed_forward_block:FeedforwardBlock, dropout: float, tgt_mask:,src_mask:):
+        super().__init__()
+
+        self.self_attention_block = self_attention_block
+        self.cross_attention_block = cross_attention_block
+        self.feed_forward_block = feed_forward_block
+        self.residual_connections = nn.Module([ResidualConnection(dropout) for _ in range(3)])
+
+    def forward():
+        x = self.residual_connections[0](x, lambda: x:self.self_attention_block(x,x,x,tgt_mask))
+        x = self.residual_connections[1](x, lambda: x:self.cross_attention_block(x,encoder_output,encoder_output,src_mask))
+        x = self.residual_connections[2](x, self.feed_forward_block)
+        return x
+
+class Decoder(nn.Module):
+
+    def __init__(self, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = Layernormalization()
+
+    def forward(self, encoder_output, sre_mask, tgt_mask):
+        for layer in self.layers:
+            x = layer(x, encoder_output, sre_mask, tgt_mask)
+        return self.norm(x)
 
 
