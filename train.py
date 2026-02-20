@@ -108,7 +108,7 @@ def run_validation(
         writer.add_scalar("validation wer", wer, global_step)
 
         bleu_metric = torchmetrics.BLEUScore()
-        bleu = bleu_metric([p.split() for p in predicted], [[e.split()] for e in expected])
+        bleu = bleu_metric(predicted, [[e] for e in expected])
         writer.add_scalar("validation BLEU", bleu, global_step)
         writer.flush()
 
